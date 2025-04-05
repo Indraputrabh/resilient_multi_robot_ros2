@@ -1,0 +1,14 @@
+package.xml
+setup.cfg
+setup.py
+../../build/multi_net_bot/multi_net_bot.egg-info/PKG-INFO
+../../build/multi_net_bot/multi_net_bot.egg-info/SOURCES.txt
+../../build/multi_net_bot/multi_net_bot.egg-info/dependency_links.txt
+../../build/multi_net_bot/multi_net_bot.egg-info/requires.txt
+../../build/multi_net_bot/multi_net_bot.egg-info/top_level.txt
+../../build/multi_net_bot/multi_net_bot.egg-info/zip-safe
+multi_net_bot/__init__.py
+resource/multi_net_bot
+test/test_copyright.py
+test/test_flake8.py
+test/test_pep257.py
