@@ -1,0 +1,46 @@
+# === ROS 2 colcon workspace ===
+build/
+install/
+log/
+
+# === Python cache and metadata ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.eggs/
+*.pyo
+*.pyd
+*.pdb
+
+# === Test outputs ===
+coverage.xml
+*.cover
+.tox/
+.nox/
+nosetests.xml
+pytest_cache/
+test-results/
+
+# === Editor/IDE files ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === System ===
+.DS_Store
+Thumbs.db
+
+# === Misc ===
+.env
+*.log
+*.bak
+*.tmp
+
+# === ROS-related ===
+*.launch.py~
+.launch.py.swp
+*.rviz
+*.urdf~
+*.xacro~
+
