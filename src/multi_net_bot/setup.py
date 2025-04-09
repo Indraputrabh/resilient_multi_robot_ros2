@@ -20,6 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'swarm_manager = multi_net_bot.swarm_manager:main',
         ],
     },
 )
+
