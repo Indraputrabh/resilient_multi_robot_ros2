@@ -95,7 +95,7 @@ class SwarmManager(Node):
         # Timer to send commands periodically.
         self.timer = self.create_timer(2.0, self.timer_callback)
         
-        # Optionally, if you wish to subscribe to additional topics (like raw robot status), do so here.
+        # Optionally, if we wish to subscribe to additional topics (like raw robot status), do so here.
         self.status_subscriber = self.create_subscription(
             String,
             'robot_status',
@@ -104,7 +104,7 @@ class SwarmManager(Node):
         )
 
     def timer_callback(self):
-        # In your real project, this might check for new game state information
+        # In the real project, we might check for new game state information
         # and decide whether to transmit a new command.
         command = "Move forward"  # Example command; this could be dynamic.
         self.get_logger().info(f"Attempting to send command: {command}")
