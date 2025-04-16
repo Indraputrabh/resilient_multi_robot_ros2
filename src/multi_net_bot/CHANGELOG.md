@@ -14,3 +14,11 @@
 - Added retransmission logic until all expected ACKs are received.
 - Revised RobotNode to include a unique robot identifier in its ACK messages.
 - Enhanced logging for debugging multi-robot ACK tracking.
+
+## [0.3.0-alpha] - 17-04-2025
+### Added
+- Implemented dynamic robot registration: Robot nodes now prompt the user for a unique identifier in the format "robot(x)" and automatically publish a registration message on the `/swarm_registration` topic.
+- Integrated a heartbeat mechanism: Robot nodes periodically send heartbeat messages on the `/swarm_heartbeat` topic to indicate they are still active.
+- Added heartbeat monitoring and deregistration in the SwarmManager: If heartbeats are not received within a defined interval, the corresponding robot is marked offline and removed from the active robot list.
+- Updated ReliablePublisher to dynamically update its expected robot IDs based on incoming registration messages.
+- Enhanced logging for registration, heartbeat, and deregistration events to aid in monitoring and debugging.

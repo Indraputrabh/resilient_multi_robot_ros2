@@ -20,13 +20,11 @@ class ReliablePublisher:
         self.attempts = 0
         self.timer = None
 
-        # Set of expected robot IDs that must send an ack.
-        # If not provided, default to an empty set (i.e., no tracking)
+        # Expected robot IDs come from dynamic registration.
         self.expected_robot_ids = set(expected_robot_ids) if expected_robot_ids is not None else set()
-        # Set to track the IDs of robots that have already acknowledged the current message.
         self.current_acks = set()
 
-        # Subscribe to the acknowledgment topic.
+        # Subscribe to ACKs.
         self.ack_subscriber = node.create_subscription(
             String,
             ack_topic,
@@ -35,15 +33,12 @@ class ReliablePublisher:
         )
 
     def send_message(self, command):
-        # Cancel any pending timer from a previous message.
         if self.timer is not None:
             self.timer.cancel()
-        # When a new command arrives, drop any unsent/old commands.
         self.current_seq = (self.current_seq + 1) if self.current_seq is not None else 1
         self.current_message = f"seq:{self.current_seq};cmd:{command}"
         self.attempts = 0
-        # Reset current ACKs for the new message.
-        self.current_acks = set()
+        self.current_acks = set()  # Reset ACK tracking.
         self._transmit()
 
     def _transmit(self):
@@ -55,98 +50,155 @@ class ReliablePublisher:
             return
 
         self.attempts += 1
+        missing = self.expected_robot_ids - self.current_acks
         self.node.get_logger().info(
-            f"Transmitting message: {self.current_message} (Attempt {self.attempts}). Waiting for ACKs from: {self.expected_robot_ids - self.current_acks}"
+            f"Transmitting message: {self.current_message} (Attempt {self.attempts}). Waiting for ACKs from: {missing}"
         )
         self.publisher.publish(String(data=self.current_message))
-        # Set a timer to call _on_timeout after the specified interval.
         self.timer = self.node.create_timer(self.retransmission_timeout, self._on_timeout)
 
     def _on_timeout(self):
-        # Timer callback to retransmit the message if not all ACKs have been received.
         if self.timer is not None:
             self.timer.cancel()
         self._transmit()
 
     def ack_callback(self, msg):
-        # Process the ACK message.
-        ack = msg.data.strip()  # Remove any extra whitespace
-        # We expect the ACK message to be in the form "ack:<sequence>;id:<robot_id>"
+        ack = msg.data.strip()
         if ack.startswith("ack:"):
             try:
                 parts = ack.split(";")
                 seq_part = parts[0]
                 id_part = parts[1] if len(parts) > 1 else ""
                 ack_seq = int(seq_part.split(":")[1])
-                # Only consider ACKs for the current command sequence.
                 if self.current_seq != ack_seq:
                     self.node.get_logger().info(f"Ignoring ACK for old seq {ack_seq}")
                     return
 
-                # Parse the robot id. Expecting "id:<robot_id>"
                 if id_part.startswith("id:"):
                     robot_id = id_part.split(":")[1]
                     self.current_acks.add(robot_id)
-                    self.node.get_logger().info(f"Received ack from {robot_id} for message seq {ack_seq}")
+                    self.node.get_logger().info(f"Received ACK from {robot_id} for seq {ack_seq}")
                 else:
-                    self.node.get_logger().warn("Received ACK without robot ID")
+                    self.node.get_logger().warn("Received ACK without robot id")
                     return
 
-                # Check if we have received ACKs from all expected robots.
                 if self.expected_robot_ids and self.current_acks >= self.expected_robot_ids:
-                    self.node.get_logger().info(f"All expected ACKs received for message seq {ack_seq}")
+                    self.node.get_logger().info(f"All expected ACKs received for seq {ack_seq}")
                     if self.timer is not None:
                         self.timer.cancel()
-                    self.current_message = None  # Message successfully delivered.
+                    self.current_message = None
                 elif not self.expected_robot_ids:
-                    # If no expected IDs are provided, treat one ACK as enough.
-                    self.node.get_logger().info(f"Received ACK for message seq {ack_seq}")
+                    self.node.get_logger().info(f"Received ACK for seq {ack_seq}")
                     if self.timer is not None:
                         self.timer.cancel()
                     self.current_message = None
 
-            except (ValueError, IndexError):
-                self.node.get_logger().warn("Received malformed ACK message")
+            except (ValueError, IndexError) as e:
+                self.node.get_logger().warn(f"Received malformed ACK: {ack} (Error: {str(e)})")
         else:
             self.node.get_logger().info("Received non-ACK message: " + ack)
 
 class SwarmManager(Node):
     """
-    The Swarm Manager node publishes robot commands using a ReliablePublisher.
-    This implementation now expects acknowledgements from multiple robots.
+    0.3-alpha - The Swarm Manager node now supports dynamic robot registration, heartbeat monitoring,
+    and updates the list of expected robots for reliable messaging.
     """
     def __init__(self):
         super().__init__('swarm_manager')
         self.get_logger().info("Swarm Manager node started.")
 
-        # Publisher for swarm commands.
+        # Publisher for commands.
         self.publisher = self.create_publisher(String, 'swarm_command', 10)
-        # Define expected robot IDs (for example, "robot1", "robot2", "robot3").
-        expected_robot_ids = {"robot1", "robot2", "robot3"}
-        # Instantiate a ReliablePublisher that handles ACKs on the "swarm_ack" topic.
+
+        # Dynamic tracking of active robots: robot_id -> last heartbeat (in seconds)
+        self.active_robots = {}
+        self.heartbeat_timeout = 5.0  # seconds
+
+        # Subscriptions for registration, heartbeat, and deregistration.
+        self.create_subscription(String, 'swarm_registration', self.registration_callback, 10)
+        self.create_subscription(String, 'swarm_heartbeat', self.heartbeat_callback, 10)
+        self.create_subscription(String, 'swarm_deregistration', self.deregistration_callback, 10)
+
+        # Timer to check for heartbeat timeouts.
+        self.create_timer(1.0, self.check_heartbeat_timeout)
+
+        # Instantiate ReliablePublisher with an initially empty expected robot set.
         self.reliable_publisher = ReliablePublisher(
-            self, self.publisher, "swarm_ack", expected_robot_ids=expected_robot_ids, retransmission_timeout=1.0, max_attempts=3
-        )
-        # Timer to send commands periodically.
-        self.timer = self.create_timer(2.0, self.timer_callback)
-        
-        # Subscribe to additional topics (e.g., raw robot status).
-        self.status_subscriber = self.create_subscription(
-            String,
-            'robot_status',
-            self.status_callback,
-            10
+            self, self.publisher, "swarm_ack", expected_robot_ids=set(), retransmission_timeout=1.0, max_attempts=3
         )
 
+        # Timer to periodically send a command.
+        self.timer = self.create_timer(2.0, self.timer_callback)
+
+        # Subscribe to robot status messages.
+        self.create_subscription(String, 'robot_status', self.status_callback, 10)
+
+    def registration_callback(self, msg):
+        # Expected format: "register:<robot_id>"
+        try:
+            data = msg.data.strip()
+            if data.startswith("register:"):
+                robot_id = data.split(":")[1]
+                self.active_robots[robot_id] = self.get_clock().now().nanoseconds / 1e9  # use seconds
+                self.get_logger().info(f"Registered robot: {robot_id}")
+                self.update_expected_robot_ids()
+            else:
+                self.get_logger().warn(f"Invalid registration format: {data}")
+        except Exception as e:
+            self.get_logger().warn(f"Error in registration callback: {str(e)}")
+
+    def heartbeat_callback(self, msg):
+        # Expected format: "heartbeat:<robot_id>"
+        try:
+            data = msg.data.strip()
+            if data.startswith("heartbeat:"):
+                robot_id = data.split(":")[1]
+                self.active_robots[robot_id] = self.get_clock().now().nanoseconds / 1e9
+                self.get_logger().info(f"Heartbeat received from: {robot_id}")
+            else:
+                self.get_logger().warn(f"Invalid heartbeat format: {data}")
+        except Exception as e:
+            self.get_logger().warn(f"Error in heartbeat callback: {str(e)}")
+
+    def deregistration_callback(self, msg):
+        # Expected format: "deregister:<robot_id>"
+        try:
+            data = msg.data.strip()
+            if data.startswith("deregister:"):
+                robot_id = data.split(":")[1]
+                if robot_id in self.active_robots:
+                    del self.active_robots[robot_id]
+                    self.get_logger().info(f"Deregistered robot: {robot_id}")
+                    self.update_expected_robot_ids()
+            else:
+                self.get_logger().warn(f"Invalid deregistration format: {data}")
+        except Exception as e:
+            self.get_logger().warn(f"Error in deregistration callback: {str(e)}")
+
+    def check_heartbeat_timeout(self):
+        current_time = self.get_clock().now().nanoseconds / 1e9
+        to_remove = []
+        for robot_id, last_seen in self.active_robots.items():
+            if current_time - last_seen > self.heartbeat_timeout:
+                to_remove.append(robot_id)
+        for robot_id in to_remove:
+            del self.active_robots[robot_id]
+            self.get_logger().warn(f"Robot {robot_id} timed out due to missed heartbeat.")
+        if to_remove:
+            self.update_expected_robot_ids()
+
+    def update_expected_robot_ids(self):
+        # Update the expected robots in the ReliablePublisher.
+        self.reliable_publisher.expected_robot_ids = set(self.active_robots.keys())
+        self.get_logger().info(f"Updated expected robot IDs: {self.reliable_publisher.expected_robot_ids}")
+
     def timer_callback(self):
-        # In the real project, you might check game state information before sending commands.
-        command = "Move forward"  # Example command; this could be dynamic.
+        command = "Move forward"
         self.get_logger().info(f"Attempting to send command: {command}")
         self.reliable_publisher.send_message(command)
 
     def status_callback(self, msg):
-        # Process status messages from robots.
-        self.get_logger().info(f"Received status: {msg.data}")
+        self.get_logger().info(f"Status update: {msg.data}")
 
 def main(args=None):
     rclpy.init(args=args)
