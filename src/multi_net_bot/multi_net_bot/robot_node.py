@@ -15,10 +15,10 @@ class RobotNode(Node):
 
         # Subscriptions and publishers
         self.create_subscription(String, 'swarm_command', self._cmd_cb, 10)
-        self.ack_pub = self.create_publisher(String, 'swarm_ack', 10)
+        self.ack_pub    = self.create_publisher(String, 'swarm_ack', 10)
         self.status_pub = self.create_publisher(String, 'robot_status', 10)
-        self.reg_pub = self.create_publisher(String, 'swarm_registration', 10)
-        self.hb_pub = self.create_publisher(String, 'swarm_heartbeat', 10)
+        self.reg_pub    = self.create_publisher(String, 'swarm_registration', 10)
+        self.hb_pub     = self.create_publisher(String, 'swarm_heartbeat', 10)
 
         # Announce ourselves and start heartbeats
         self._send_registration()
@@ -37,13 +37,14 @@ class RobotNode(Node):
     def _cmd_cb(self, msg):
         # Parse incoming command: seq, cmd, optional to-list
         parts = dict(p.split(":",1) for p in msg.data.split(";") if ":" in p)
-        seq = int(parts.get("seq", 0))
+        seq     = int(parts.get("seq", 0))
         to_list = parts.get("to")
-        cmd = parts.get("cmd")
+        cmd     = parts.get("cmd")
 
         # Selective delivery: ignore if not addressed to me
         if to_list and self.robot_id not in to_list.split(","):
             return
+
         # Ordering: drop duplicates or stale commands
         if seq <= self.last_seq:
             self.get_logger().info(f"Ignored seq {seq}")
@@ -61,13 +62,23 @@ class RobotNode(Node):
 
 
 def main(args=None):
+    import re, sys
     rclpy.init(args=args)
-    # Prompt for a valid robot id: 'robotN'
-    import re
+
+    # Prompt for a valid robot id: accept 'N' or 'robotN'
     while True:
-        rid = input("Enter robot id (robotN): ")
-        if re.fullmatch(r"robot\\d+", rid):
+        user = input("Enter robot id (e.g. 1 or robot1, or 'exit' to quit): ").strip()
+        if user.lower() == 'exit':
+            print("Exiting.")
+            sys.exit(0)
+        if user.isdigit():
+            rid = f"robot{user}"
             break
+        if re.fullmatch(r"robot\d+", user):
+            rid = user
+            break
+        print("Invalid format; try again (e.g. '1' or 'robot1').")
+
     node = RobotNode(rid)
     try:
         rclpy.spin(node)
@@ -77,6 +88,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
