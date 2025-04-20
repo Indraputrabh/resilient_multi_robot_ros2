@@ -22,3 +22,12 @@
 - Added heartbeat monitoring and deregistration in the SwarmManager: If heartbeats are not received within a defined interval, the corresponding robot is marked offline and removed from the active robot list.
 - Updated ReliablePublisher to dynamically update its expected robot IDs based on incoming registration messages.
 - Enhanced logging for registration, heartbeat, and deregistration events to aid in monitoring and debugging.
+
+# ## [0.3.1] - 20-04-2025
+### Added
+- Configurable ACK threshold (absolute or percentage) in ReliablePublisher.
+- Selective retransmission via `to:` field to only resend to missing robots.
+- Exponential backoff with dynamic timeout scaling based on missing ACKs.
+- History buffer for message replay or debugging.
+- Message ordering and selective delivery logic in RobotNode.
+- Detailed inline comments throughout to explain code sections.
