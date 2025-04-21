@@ -2,7 +2,9 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy
 from std_msgs.msg import String
+import re, sys
 
 # RobotNode: listens for commands, enforces ordering/selective delivery,
 # and replies with ACKs and status updates.
@@ -10,14 +12,18 @@ class RobotNode(Node):
     def __init__(self, robot_id):
         super().__init__('robot_node')
         self.robot_id = robot_id
+
         # Track last seen sequence to drop duplicates or old messages
         self.last_seq = 0
 
+        # -- QoS setup for registration (latching) --
+        reg_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
         # Subscriptions and publishers
         self.create_subscription(String, 'swarm_command', self._cmd_cb, 10)
-        self.ack_pub    = self.create_publisher(String, 'swarm_ack', 10)
-        self.status_pub = self.create_publisher(String, 'robot_status', 10)
-        self.reg_pub    = self.create_publisher(String, 'swarm_registration', 10)
+        self.ack_pub    = self.create_publisher(String, 'swarm_ack',       10)
+        self.status_pub = self.create_publisher(String, 'robot_status',    10)
+        self.reg_pub    = self.create_publisher(String, 'swarm_registration', reg_qos)
         self.hb_pub     = self.create_publisher(String, 'swarm_heartbeat', 10)
 
         # Announce ourselves and start heartbeats
@@ -36,7 +42,7 @@ class RobotNode(Node):
 
     def _cmd_cb(self, msg):
         # Parse incoming command: seq, cmd, optional to-list
-        parts = dict(p.split(":",1) for p in msg.data.split(";") if ":" in p)
+        parts   = dict(p.split(":",1) for p in msg.data.split(";") if ":" in p)
         seq     = int(parts.get("seq", 0))
         to_list = parts.get("to")
         cmd     = parts.get("cmd")
@@ -60,9 +66,7 @@ class RobotNode(Node):
         status = String(data=f"OK:{seq}:{self.robot_id}")
         self.status_pub.publish(status)
 
-
 def main(args=None):
-    import re, sys
     rclpy.init(args=args)
 
     # Prompt for a valid robot id: accept 'N' or 'robotN'
@@ -83,12 +87,10 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        # Optional: send a deregistration message here if necessary.
         pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()

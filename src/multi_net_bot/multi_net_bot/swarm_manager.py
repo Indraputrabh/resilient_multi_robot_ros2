@@ -7,7 +7,7 @@ from std_msgs.msg import String
 from collections import deque
 
 # -----------------------------------------------------------------------------
-# ReliablePublisher: provides TCP-like reliability on top of ROS2 topics.
+# ReliablePublisher: provides TCP‑like reliability on top of ROS2 topics.
 # - Configurable ACK threshold (absolute or percentage).
 # - Selective retransmission: only resend to robots that still need it.
 # - Exponential backoff with dynamic scaling based on missing ACKs.
@@ -22,7 +22,7 @@ class ReliablePublisher:
                  base_timeout=1.0,
                  max_attempts=5,
                  backoff_factor=2.0,
-                 ack_threshold=1.0,  # fraction (0.0-1.0) or absolute count
+                 ack_threshold=1.0,   # fraction (0.0–1.0) or absolute count
                  history_size=10):
         # Store references and parameters
         self.node = node
@@ -30,15 +30,15 @@ class ReliablePublisher:
         self.ack_sub = node.create_subscription(
             String, ack_topic, self._ack_callback, 10
         )
-        # Timing and retry settings
+        # Timing & retry settings
         self.base_timeout = base_timeout
         self.max_attempts = max_attempts
         self.backoff_factor = backoff_factor
-        # ACK policy: can be int (e.g. 3 robots) or float (e.g. 0.8 => 80%)
+        # ACK policy: int for count or float for percentage
         self.ack_threshold = ack_threshold
-        # Track which robots we expect ACKs from
+        # Track expected ACK senders
         self.expected = set(expected_robot_ids or ())
-        # State for the current message
+        # State for current message
         self.current_acks = set()
         self.seq = 0
         self.history = deque(maxlen=history_size)
@@ -47,70 +47,65 @@ class ReliablePublisher:
         self._timer = None
 
     def send_message(self, command):
-        # Cancel any running timer before starting a new send
+        # Cancel any prior timer
         if self._timer:
             self._timer.cancel()
-        # Increment sequence and prepare payload
+        # Prepare new message
         self.seq += 1
         self._pending = f"seq:{self.seq};cmd:{command}"
-        # Record in history for debugging or replay
         self.history.append((self.seq, self._pending))
-        # Reset ACK tracking and attempt count
         self.current_acks.clear()
         self.attempt = 0
-        # Kick off the first transmission
+        # Start retransmission cycle
         self._transmit()
 
     def _compute_timeout(self):
-        # Compute dynamic timeout: base × backoff^attempt × (1 + missing/total)
+        # Dynamic timeout = base × backoff^attempt × (1 + missing/total)
         missing = len(self.expected) - len(self.current_acks)
         scale = 1.0 + (missing / len(self.expected)) if self.expected else 1.0
         return self.base_timeout * (self.backoff_factor ** self.attempt) * scale
 
     def _transmit(self):
-        # Check if we've exhausted retry attempts
+        # If out of attempts, give up
         if self.attempt >= self.max_attempts:
             self.node.get_logger().warn(
                 f"Give up on seq {self.seq} after {self.attempt} attempts; "
                 f"ACKs={len(self.current_acks)}/{len(self.expected)}"
             )
-            # Drop pending message
             self._pending = None
             return
 
-        # Increase attempt count
         self.attempt += 1
-        # Determine which robots still need the message
         missing = self.expected - self.current_acks
-        # If some robots already ACKed, send only to missing ones
+
+        # Selective retransmit: include only missing robots
         if missing and missing != self.expected:
             to_field = ",".join(sorted(missing))
             payload = f"{self._pending};to:{to_field}"
         else:
-            # Broadcast to all if no selective list
+            # Broadcast to all
             payload = self._pending
 
-        # Log and publish
+        # Publish and schedule next timeout
         self.node.get_logger().info(
             f"[Attempt {self.attempt}] pub → '{payload}' waiting on {missing}"
         )
         self.pub.publish(String(data=payload))
-        # Schedule next retry using dynamic timeout
         timeout = self._compute_timeout()
         self._timer = self.node.create_timer(timeout, self._on_timeout)
 
     def _on_timeout(self):
-        # Cancel previous timer and retry
+        # Retry on timeout
         if self._timer:
             self._timer.cancel()
         self._transmit()
 
     def _ack_callback(self, msg):
+        # Handle incoming ACKs
         data = msg.data.strip()
         if not data.startswith("ack:"):
-            return  # ignore non-ACKs
+            return
         try:
-            # Parse semicolon-separated key:value pairs
             parts = dict(p.split(":", 1) for p in data.split(";") if ":" in p)
             ack_seq = int(parts.get("ack", -1))
             sender = parts.get("id")
@@ -118,26 +113,22 @@ class ReliablePublisher:
             self.node.get_logger().warn(f"Malformed ACK → {data}")
             return
 
-        # Only care about ACKs for the current sequence
+        # Ignore out‑of‑date ACKs
         if ack_seq != self.seq:
-            self.node.get_logger().info(f"Ignoring ACK for seq {ack_seq}")
             return
 
-        # Record ACK and log progress
+        # Record ACK and check threshold
         if sender:
             self.current_acks.add(sender)
             self.node.get_logger().info(
                 f"ACK from {sender} ({len(self.current_acks)}/{len(self.expected)})"
             )
 
-        # Determine how many ACKs we need
         if isinstance(self.ack_threshold, int):
             required = self.ack_threshold
         else:
-            # percentage of expected robots, at least 1
             required = max(1, int(self.ack_threshold * len(self.expected)))
 
-        # If we've met the threshold, finish up
         if len(self.current_acks) >= required:
             self.node.get_logger().info(
                 f"Threshold met: {len(self.current_acks)}/{len(self.expected)}"
@@ -148,30 +139,33 @@ class ReliablePublisher:
 
 
 # -----------------------------------------------------------------------------
-# SwarmManager: tracks active robots and sends commands via ReliablePublisher
+# SwarmManager: tracks active robots, reacts to role changes, and sends
+# role‑specific commands via ReliablePublisher.
 # -----------------------------------------------------------------------------
 class SwarmManager(Node):
     def __init__(self):
         super().__init__('swarm_manager')
         self.get_logger().info("Swarm Manager node started.")
 
-        # Publisher for sending commands to the swarm
-        self.publisher = self.create_publisher(String, 'swarm_command', 10)
+        # Track active robots and their roles
+        self.active_robots = {}    # robot_id -> last heartbeat timestamp
+        self.robot_roles = {}      # robot_id -> current role
+        self.heartbeat_timeout = 5.0
 
-        # Track active robots: {robot_id: last_heartbeat_timestamp}
-        self.active_robots = {}
-        self.heartbeat_timeout = 5.0  # seconds
+        # Subscriptions for lifecycle
+        self.create_subscription(String, 'swarm_registration',   self._reg_cb,    10)
+        self.create_subscription(String, 'swarm_heartbeat',      self._hb_cb,     10)
+        self.create_subscription(String, 'swarm_deregistration', self._dreg_cb,   10)
+        self.create_subscription(String, 'robot_status',         self._status_cb, 10)
 
-        # Subscriptions for registration, heartbeat, deregistration, and status
-        self.create_subscription(String, 'swarm_registration', self._reg_cb, 10)
-        self.create_subscription(String, 'swarm_heartbeat', self._hb_cb, 10)
-        self.create_subscription(String, 'swarm_deregistration', self._dreg_cb, 10)
-        self.create_subscription(String, 'robot_status', self._status_cb, 10)
+        # Subscription for role updates
+        self.create_subscription(String, 'swarm_roles',          self._role_cb,   10)
 
         # Periodic timer to purge stale robots
         self.create_timer(1.0, self._check_heartbeat)
 
-        # Initialize ReliablePublisher with desired settings
+        # Publisher & reliable layer
+        self.publisher = self.create_publisher(String, 'swarm_command', 10)
         self.reliable_publisher = ReliablePublisher(
             node=self,
             publisher=self.publisher,
@@ -180,72 +174,83 @@ class SwarmManager(Node):
             base_timeout=1.0,
             max_attempts=5,
             backoff_factor=2.0,
-            ack_threshold=0.8,  # require 80% ACKs
+            ack_threshold=0.8,   # require 80% ACKs
             history_size=20
         )
 
-        # Timer to send a test command periodically
-        self.create_timer(2.0, self._timer_cb)
+        # Timer to dispatch role‑specific commands
+        self.create_timer(2.0, self._role_timer_cb)
 
+    # -------------------
+    # Robot lifecycle callbacks
+    # -------------------
     def _reg_cb(self, msg):
-        # Handle "register:<robot_id>" messages
-        data = msg.data.strip()
-        if data.startswith("register:"):
-            rid = data.split(":", 1)[1]
-            # Record registration timestamp
-            self.active_robots[rid] = self.get_clock().now().nanoseconds / 1e9
-            self.get_logger().info(f"Registered {rid}")
-            self._update_expected()
-        else:
-            self.get_logger().warn(f"Bad registration: {data}")
+        rid = msg.data.split(":", 1)[1]
+        self.active_robots[rid] = self.get_clock().now().nanoseconds / 1e9
+        self.get_logger().info(f"Registered {rid}")
+        self._update_expected()
 
     def _hb_cb(self, msg):
-        # Handle "heartbeat:<robot_id>" messages
-        data = msg.data.strip()
-        if data.startswith("heartbeat:"):
-            rid = data.split(":", 1)[1]
-            self.active_robots[rid] = self.get_clock().now().nanoseconds / 1e9
-            self.get_logger().info(f"Heartbeat from {rid}")
-        else:
-            self.get_logger().warn(f"Bad heartbeat: {data}")
+        rid = msg.data.split(":", 1)[1]
+        self.active_robots[rid] = self.get_clock().now().nanoseconds / 1e9
 
     def _dreg_cb(self, msg):
-        # Handle "deregister:<robot_id>" messages
-        data = msg.data.strip()
-        if data.startswith("deregister:"):
-            rid = data.split(":", 1)[1]
-            self.active_robots.pop(rid, None)
-            self.get_logger().info(f"Deregistered {rid}")
-            self._update_expected()
+        rid = msg.data.split(":", 1)[1]
+        self.active_robots.pop(rid, None)
+        self.robot_roles.pop(rid, None)
+        self.get_logger().info(f"Deregistered {rid}")
+        self._update_expected()
 
     def _status_cb(self, msg):
-        # Log robot status updates for monitoring
         self.get_logger().info(f"Status: {msg.data}")
 
     def _check_heartbeat(self):
-        # Periodically remove robots that haven't sent a heartbeat in time
         now = self.get_clock().now().nanoseconds / 1e9
         removed = []
         for rid, ts in list(self.active_robots.items()):
             if now - ts > self.heartbeat_timeout:
                 removed.append(rid)
-                self.active_robots.pop(rid)
-                self.get_logger().warn(f"Timeout {rid}")
+        for rid in removed:
+            del self.active_robots[rid]
+            self.robot_roles.pop(rid, None)
+            self.get_logger().warn(f"Timeout {rid}")
         if removed:
             self._update_expected()
 
     def _update_expected(self):
-        # Refresh the expected IDs in ReliablePublisher based on active robots
         self.reliable_publisher.expected = set(self.active_robots.keys())
         self.get_logger().info(
             f"Expecting ACKs from: {self.reliable_publisher.expected}"
         )
 
-    def _timer_cb(self):
-        # Periodic test command; replace with your own logic as needed
-        cmd = "Move forward"
-        self.get_logger().info(f"Sending: {cmd}")
-        self.reliable_publisher.send_message(cmd)
+    # -------------------
+    # Role updates callback
+    # -------------------
+    def _role_cb(self, msg):
+        parts = dict(p.split(":",1) for p in msg.data.split(";") if ":" in p)
+        rid  = parts.get("assign")
+        role = parts.get("role")
+        if rid and role:
+            self.robot_roles[rid] = role
+            self.get_logger().info(f"Role update: {rid} → {role}")
+
+    # -------------------
+    # Dispatch role‑specific commands
+    # -------------------
+    def _role_timer_cb(self):
+        role_cmds = {
+            'striker':    'Move forward aggressively',
+            'defender':   'Move forward defensively',
+            'goalkeeper': 'Hold position',
+        }
+        for role, cmd in role_cmds.items():
+            recipients = {rid for rid, r in self.robot_roles.items() if r == role}
+            if not recipients:
+                continue
+            self.reliable_publisher.expected = recipients
+            self.get_logger().info(f"Sending '{cmd}' to {role}s: {recipients}")
+            self.reliable_publisher.send_message(cmd)
+
 def main(args=None):
     rclpy.init(args=args)
     node = SwarmManager()
@@ -256,6 +261,6 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-        
+
 if __name__ == '__main__':
     main()

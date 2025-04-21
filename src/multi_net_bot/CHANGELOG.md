@@ -31,3 +31,22 @@
 - History buffer for message replay or debugging.
 - Message ordering and selective delivery logic in RobotNode.
 - Detailed inline comments throughout to explain code sections.
+
+## [0.3.2] - 21-04-2025
+
+### SwarmManager
+- Subscribed to `/swarm_roles` and now tracks each robot’s current role in `self.robot_roles`.
+- Added `_role_timer_cb()` to dispatch **role‑specific commands** (e.g. “Move forward defensively” to defenders) by temporarily setting `ReliablePublisher.expected` to only that role’s robots.
+- Consolidated all lifecycle callbacks (`_reg_cb`, `_hb_cb`, `_dreg_cb`, `_status_cb`) to keep `active_robots` up to date and refresh the ACK‑expected set automatically.
+- Retained the existing reliable messaging layer but wired it into role‑aware command dispatch.
+
+### RoleManager
+- New standalone node that **prompts** at startup for counts of each role (e.g. striker, defender, goalkeeper).
+- Expands those counts into a pool of available role slots and **assigns** them on robot registration or first heartbeat.
+- Implements **automatic failover**: when a robot deregisters or times out, its freed role is returned to the pool and immediately reassigned to the next waiting robot.
+- Publishes all role assignments on `/swarm_roles` so the rest of the system stays in sync.
+
+### RobotNode
+- Subscribes to `/swarm_roles` and stores its assigned `self.my_role`.
+- No longer blindly accepts every command: filters incoming `/swarm_command` messages by `to:` list **and** by `role_req:` (if present) so only role‑relevant commands are executed.
+- Continues to enforce in‑order delivery via `self.last_seq`, send ACKs (`ack:<seq>;id:<robot>`) and status updates, and heartbeat/registration for dynamic discovery.
