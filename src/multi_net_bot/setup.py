@@ -21,8 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'swarm_manager = multi_net_bot.swarm_manager:main',
-            'robot_node = my_swarm_package.robot_node:main',
-            'role_manager = my_swarm_package.role_manager:main',
+            'robot_node = multi_net_bot.robot_node:main',
+            'role_manager = multi_net_bot.role_manager:main',
         ],
     },
 )
