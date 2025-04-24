@@ -1,12 +1,12 @@
-# How to Build the Project
-cd ~/RESILIENT_MULTI_ROBOT_ROS2
-source /opt/ros/jazzy/setup.bash
-colcon build
-source install/setup.bash
-ros2 run multi_net_bot talker
-
-# Source ROS 2 Jazzy base environment
-source /opt/ros/jazzy/setup.bash
-
-# Then source your workspace overlay
-source ~/RESILIENT_MULTI_ROBOT_ROS2/install/setup.bash
+# clone repo
+$ git clone https://github.com/Indraputrabh/resilient_multi_robot_ros2
+$ cd multinet-bot-ros2
+ 
+# build
+$ colcon build --packages-select multi_net_bot
+$ source install/setup.bash
+ 
+# launch core nodes
+$ ros2 run multi_net_bot role_manager
+$ ros2 run multi_net_bot swarm_manager
+$ ros2 run multi_net_bot robot_node  # repeat per robot
